@@ -300,7 +300,7 @@ def fairfil_trainer(input_file, args):
             # nce_logits, nce_labels = contrastive_loss(fair_filter, score_function, args, device)
             # nce_loss = criterion(nce_logits, nce_labels)
             features = fair_filter.reshape(-1,2,768).permute(1,0,2)
-            nce_loss = info_nce(features[0], features[1])
+            nce_loss = -info_nce(features[0], features[1])
 
             # sens_batch = []
             b_size = input_ids.shape[0]
@@ -321,7 +321,7 @@ def fairfil_trainer(input_file, args):
                     sens_batch[j//2][sens_index] = sens_emb
                 j+=1
 
-            club_loss = -club(sens_batch, features[0])
+            club_loss = club(sens_batch, features[0])
 
             loss = nce_loss + club_loss
 
