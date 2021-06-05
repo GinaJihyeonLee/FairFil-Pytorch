@@ -25,26 +25,28 @@ def match(a,L):
 	return False
 
 def replace(a,new,L):
-	Lnew = []
-	for b in L:
-		if a == b:
-			Lnew.append(new)
-		else:
-			Lnew.append(b)
-	return ' '.join(Lnew)
+    word = ""
+    Lnew = []
+    for i, b in enumerate(L):
+        if a == b:
+            Lnew.append(new)
+            word = b
+        else:
+            Lnew.append(b)
+    return ' '.join(Lnew), word
 
 def template2(words, sent, sent_list, all_pairs):
     for i, (female, male) in enumerate(words):
         if match(female, sent_list):
             sent_f = sent
-            sent_m = replace(female,male,sent_list)
-            all_pairs[i]['f'].append(sent_f)
-            all_pairs[i]['m'].append(sent_m)
+            sent_m, word = replace(female,male,sent_list)
+            all_pairs[i]['f'].append([sent_f, word])
+            all_pairs[i]['m'].append([sent_m, ""])
         if match(male, sent_list):
-            sent_f = replace(male,female,sent_list)
+            sent_f, word = replace(male,female,sent_list)
             sent_m = sent
-            all_pairs[i]['f'].append(sent_f)
-            all_pairs[i]['m'].append(sent_m)
+            all_pairs[i]['f'].append([sent_f,""])
+            all_pairs[i]['m'].append([sent_m, word])
     return all_pairs
 
 def get_sst():
@@ -79,3 +81,8 @@ def get_data():
     print("sst has {} pairs of templates".format(bucket_size))
     print('')
     return gender
+
+# if __name__ == "__main__":
+#     data = get_data()
+#     import pdb
+#     pdb.set_trace()

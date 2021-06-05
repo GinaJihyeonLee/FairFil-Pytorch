@@ -27,17 +27,19 @@ logger = logging.getLogger(__name__)
 
 class InputExample(object):
 
-    def __init__(self, unique_id, text_a, text_b):
+    def __init__(self, unique_id, text_a, text_b, sens_word):
         self.unique_id = unique_id
         self.text_a = text_a
         self.text_b = text_b
+        self.sens_word = sens_word
 
 
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, unique_id, tokens, input_ids, input_mask, input_type_ids):
+    def __init__(self, unique_id, sens_word, tokens, input_ids, input_mask, input_type_ids):
         self.unique_id = unique_id
+        self.sens_word = sens_word
         self.tokens = tokens
         self.input_ids = input_ids
         self.input_mask = input_mask
@@ -163,6 +165,7 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
         features.append(
             InputFeatures(
                 unique_id=example.unique_id,
+                sens_word=example.sens_word,
                 tokens=tokens,
                 input_ids=input_ids,
                 input_mask=input_mask,
@@ -193,16 +196,26 @@ def read_examples(input_file):
     unique_id = 0
     for k,v in input_file.items():
         for i in range(len(v['f'])):
-            senf = v['f'][i]
-            senm = v['m'][i]
+            senf = v['f'][i][0]
+            wordf = v['f'][i][1]
+            senm = v['m'][i][0]
+            wordm = v['m'][i][1]
             text_f = senf
             text_m = senm
             text_b = None
-            examples.append(
-                InputExample(unique_id=unique_id, text_a=text_f, text_b=text_b))
-            examples.append(
-                InputExample(unique_id=unique_id+1, text_a=text_m, text_b=text_b))
-        unique_id += 2
+            if wordm=="": 
+                examples.append(
+                    InputExample(unique_id=unique_id, text_a=text_f, text_b=text_b, sens_word=wordf))
+                examples.append(
+                    InputExample(unique_id=unique_id+1, text_a=text_m, text_b=text_b, sens_word=wordm))
+            elif wordf=="":
+                examples.append(
+                    InputExample(unique_id=unique_id+1, text_a=text_f, text_b=text_b, sens_word=wordf))
+                examples.append(
+                    InputExample(unique_id=unique_id, text_a=text_m, text_b=text_b, sens_word=wordm))
+            else:
+                raise Exception("One of the index must be -1")
+            unique_id += 2
     return examples
 
 
@@ -229,7 +242,8 @@ def fairfil_trainer(input_file, args):
     unique_id_to_feature = {}
     for feature in features:
         unique_id_to_feature[feature.unique_id] = feature
-
+    import pdb
+    pdb.set_trace()
     model = BertModel.from_pretrained(args.bert_model)
     model.to(device)
 
@@ -255,7 +269,7 @@ def fairfil_trainer(input_file, args):
     score_function = SCORE(768*2,100,1).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     params = list(filter.parameters())+list(score_function.parameters())
-    optimizer = torch.optim.Adam(params, lr=0.001)
+    optimizer = torch.optim.Adam(params, lr=0.00005)
 
     n_iter = 0
     for epoch in tqdm(range(args.epochs)):
