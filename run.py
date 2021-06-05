@@ -23,9 +23,10 @@ def main():
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. Sequences longer "
                             "than this will be truncated, and sequences shorter than this will be padded.")
-    parser.add_argument("--batch_size", default=128, type=int, help="Batch size for predictions.")
+    parser.add_argument("--batch_size", default=16, type=int, help="Batch size for predictions.")
     parser.add_argument("--epochs", default=10, type=int, help="num of epochs.")
     parser.add_argument("--log_step", default=10, type=int, help="")
+    parser.add_argument("--temperature", default=0.07, type=float, help="temperature scaling")
     parser.add_argument("--log_dir", default="./log", type=str, help="log directory")
     parser.add_argument("--local_rank",
                         type=int,

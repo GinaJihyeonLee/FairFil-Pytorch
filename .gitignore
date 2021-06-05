@@ -1,4 +1,6 @@
 /log
+/data
+/results
 
 *.json
 

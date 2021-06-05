@@ -72,18 +72,14 @@ def contrastive_loss(features, score_function, args, device):
     features = features.reshape(-1,2,768).permute(1,0,2)
     features = torch.cat((features[0],features[1]),dim=0)
     labels = torch.cat([torch.arange(features.shape[0]//2) for i in range(2)], dim=0)
-    # labels = torch.arange(features.shape[0]//2).repeat_interleave(2)
     labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
     labels = labels.to(device)
-
     features = F.normalize(features, dim=1)
     #score function 기준으로 바꾸기
     similarity_matrix = torch.matmul(features, features.T)
-    # discard the main diagonal from both: labels and similarities matrix
     mask = torch.eye(labels.shape[0]).to(device) > 0
     labels = labels[~mask].view(labels.shape[0], -1)
     similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
-    # assert similarity_matrix.shape == labels.shape
 
     # select and combine multiple positives
     positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
@@ -91,7 +87,7 @@ def contrastive_loss(features, score_function, args, device):
     negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
     logits = torch.cat([positives, negatives], dim=1)
     labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
-    # logits = logits / self.args.temperature
+    logits = logits / args.temperature
     return logits, labels
 
 
@@ -216,6 +212,9 @@ def read_examples(input_file):
             else:
                 raise Exception("One of the index must be -1")
             unique_id += 2
+        # import pdb
+        # pdb.set_trace()
+
     return examples
 
 
@@ -238,12 +237,13 @@ def fairfil_trainer(input_file, args):
 
     features = convert_examples_to_features(
         examples=examples, seq_length=args.max_seq_length, tokenizer=tokenizer)
-
     unique_id_to_feature = {}
     for feature in features:
         unique_id_to_feature[feature.unique_id] = feature
+
     import pdb
     pdb.set_trace()
+
     model = BertModel.from_pretrained(args.bert_model)
     model.to(device)
 
@@ -285,13 +285,10 @@ def fairfil_trainer(input_file, args):
             nce_logits, nce_labels = contrastive_loss(fair_filter, score_function, args, device)
             nce_loss = criterion(nce_logits, nce_labels)
 
-            #club loss 추가해주면 될듯
-            #짝수번 Index가 original. sensitive word index를 알아서 그거랑 loss 걸어야되는데 그부분을 앞에서 안뽑았다ㅠ 일단 랜덤 인덱스로 구현해도 될듯.
             club_loss = club()
 
             loss = nce_loss + club_loss
 
-            #pretrain graph 아직 안끊음
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

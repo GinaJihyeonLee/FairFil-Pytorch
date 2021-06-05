@@ -42,11 +42,15 @@ def template2(words, sent, sent_list, all_pairs):
             sent_m, word = replace(female,male,sent_list)
             all_pairs[i]['f'].append([sent_f, word])
             all_pairs[i]['m'].append([sent_m, ""])
+            # import pdb
+            # pdb.set_trace()
         if match(male, sent_list):
             sent_f, word = replace(male,female,sent_list)
             sent_m = sent
             all_pairs[i]['f'].append([sent_f,""])
             all_pairs[i]['m'].append([sent_m, word])
+            # import pdb
+            # pdb.set_trace()
     return all_pairs
 
 def get_sst():
