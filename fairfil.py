@@ -255,8 +255,11 @@ def fairfil_trainer(input_file, args):
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
                                                           output_device=args.local_rank)
-    # elif n_gpu > 1:
-    #     model = torch.nn.DataParallel(model)
+    elif n_gpu > 1:
+        model = torch.nn.DataParallel(model)
+    
+    for param in model.parameters():
+        param.requires_grad = False
 
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
@@ -275,7 +278,7 @@ def fairfil_trainer(input_file, args):
     # score_function = SCORE(768*2,100,1).to(device)
     # criterion = nn.CrossEntropyLoss().to(device)
     # params = list(filter.parameters())+list(score_function.parameters())
-    optimizer = torch.optim.Adam(list(filter.parameters()), lr=0.001)
+    optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.001)
 
     info_nce = mi_estimators.InfoNCE(x_dim=768, y_dim=768, hidden_size=500)
     club = mi_estimators.CLUBSample(x_dim=768, y_dim=768, hidden_size=500)
