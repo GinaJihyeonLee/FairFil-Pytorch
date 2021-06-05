@@ -6,6 +6,9 @@ import re
 from tqdm import tqdm
 import os
 
+import numpy as np
+
+import random
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -18,12 +21,13 @@ from pytorch_pretrained_bert.modeling import BertModel
 from utils import accuracy
 from utils import save_checkpoint
 
+# from mutual_information import info_nce
+from mutual_information import mi_estimators
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
                     level = logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 class InputExample(object):
 
@@ -32,7 +36,6 @@ class InputExample(object):
         self.text_a = text_a
         self.text_b = text_b
         self.sens_word = sens_word
-
 
 class InputFeatures(object):
     """A single set of features of data."""
@@ -56,43 +59,43 @@ class MLP(nn.Module):
         return x
 
 
-class SCORE(nn.Module):
-    def __init__(self, D_in, D_mid, D_out):
-        super().__init__()
-        self.linear1 = nn.Linear(D_in, D_mid)
-        self.linear2 = nn.Linear(D_mid, D_out)
-    def forward(self,x):
-        x = self.linear1(x)
-        x = self.linear2(x)
-        return x
+# class SCORE(nn.Module):
+#     def __init__(self, D_in, D_mid, D_out):
+#         super().__init__()
+#         self.linear1 = nn.Linear(D_in, D_mid)
+#         self.linear2 = nn.Linear(D_mid, D_out)
+#     def forward(self,x):
+#         x = self.linear1(x)
+#         x = self.linear2(x)
+#         return x
 
 
-def contrastive_loss(features, score_function, args, device):
+# def contrastive_loss(features, score_function, args, device):
+#     features = features.reshape(-1,2,768).permute(1,0,2) #[32,768]-->[2,16,768]
+#     features = torch.cat((features[0],features[1]),dim=0) 
+#     labels = torch.cat([torch.arange(features.shape[0]//2) for i in range(2)], dim=0)
+#     # labels = torch.arange(features.shape[0]//2).repeat_interleave(2)
+#     labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+#     labels = labels.to(device)
 
-    features = features.reshape(-1,2,768).permute(1,0,2)
-    features = torch.cat((features[0],features[1]),dim=0)
-    labels = torch.cat([torch.arange(features.shape[0]//2) for i in range(2)], dim=0)
-    labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
-    labels = labels.to(device)
-    features = F.normalize(features, dim=1)
-    #score function 기준으로 바꾸기
-    similarity_matrix = torch.matmul(features, features.T)
-    mask = torch.eye(labels.shape[0]).to(device) > 0
-    labels = labels[~mask].view(labels.shape[0], -1)
-    similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+#     features = F.normalize(features, dim=1)
+#     #score function 기준으로 바꾸기
+#     similarity_matrix = torch.matmul(features, features.T)
+#     # discard the main diagonal from both: labels and similarities matrix
+#     mask = torch.eye(labels.shape[0]).to(device) > 0
+#     labels = labels[~mask].view(labels.shape[0], -1)
+#     similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+
+    # assert similarity_matrix.shape == labels.shape
 
     # select and combine multiple positives
-    positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
-    # select only the negatives the negatives
-    negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
-    logits = torch.cat([positives, negatives], dim=1)
-    labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
-    logits = logits / args.temperature
-    return logits, labels
-
-
-def club():
-    return 0
+    # positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+    # # select only the negatives the negatives
+    # negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+    # logits = torch.cat([positives, negatives], dim=1)
+    # labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
+    # # logits = logits / self.args.temperature
+    # return logits, labels
 
 
 def convert_examples_to_features(examples, seq_length, tokenizer):
@@ -199,6 +202,11 @@ def read_examples(input_file):
             text_f = senf
             text_m = senm
             text_b = None
+            # if wordm=="" or wordf=="":
+            #     examples.append(
+            #         InputExample(unique_id=unique_id, text_a=text_f, text_b=text_b, sens_word=wordf))
+            #     examples.append(
+            #         InputExample(unique_id=unique_id+1, text_a=text_m, text_b=text_b, sens_word=wordm))
             if wordm=="": 
                 examples.append(
                     InputExample(unique_id=unique_id, text_a=text_f, text_b=text_b, sens_word=wordf))
@@ -241,9 +249,8 @@ def fairfil_trainer(input_file, args):
     for feature in features:
         unique_id_to_feature[feature.unique_id] = feature
 
-    import pdb
-    pdb.set_trace()
-
+    # import pdb
+    # pdb.set_trace()
     model = BertModel.from_pretrained(args.bert_model)
     model.to(device)
 
@@ -252,12 +259,16 @@ def fairfil_trainer(input_file, args):
                                                           output_device=args.local_rank)
     elif n_gpu > 1:
         model = torch.nn.DataParallel(model)
+    
+    for param in model.parameters():
+        param.requires_grad = False
 
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
     all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+    all_unique_ids = torch.tensor([f.unique_id for f in features], dtype=torch.long)
 
-    train_data = TensorDataset(all_input_ids, all_input_mask, all_example_index)
+    train_data = TensorDataset(all_input_ids, all_input_mask, all_example_index, all_unique_ids)
     if args.local_rank == -1:
         train_sampler = SequentialSampler(train_data)
     else:
@@ -265,27 +276,53 @@ def fairfil_trainer(input_file, args):
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
 
     #구체적인 값 명시 안되어서 적당히 설정
-    filter = MLP(768,768).to(device)
-    score_function = SCORE(768*2,100,1).to(device)
-    criterion = nn.CrossEntropyLoss().to(device)
-    params = list(filter.parameters())+list(score_function.parameters())
-    optimizer = torch.optim.Adam(params, lr=0.00005)
+    filter = MLP(768,768).to(device) 
+    # score_function = SCORE(768*2,100,1).to(device)
+    # criterion = nn.CrossEntropyLoss().to(device)
+    # params = list(filter.parameters())+list(score_function.parameters())
+    info_nce = mi_estimators.InfoNCE(x_dim=768, y_dim=768, hidden_size=500)
+    club = mi_estimators.CLUBSample(x_dim=768, y_dim=768, hidden_size=500)
+    optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.001)
+
 
     n_iter = 0
     for epoch in tqdm(range(args.epochs)):
-        for input_ids, input_mask, example_indices in (train_dataloader):
+        for input_ids, input_mask, example_indices, unique_ids in (train_dataloader):
+            # print(epoch, input_ids, input_mask, example_indices)
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
             all_encoder_layers, _ = model(input_ids, token_type_ids=None, attention_mask=input_mask)
-            all_encoder_layers = all_encoder_layers
-            sent_emb = all_encoder_layers[-1].permute(1,0,2)[0]
+            # all_encoder_layers = all_encoder_layers
+            sent_emb = all_encoder_layers[-1].permute(1,0,2)[0] #shape: (batch size, 768)
+            ori_emb = sent_emb.reshape(-1,2,768).permute(1,0,2)[0]
             
             fair_filter = filter(sent_emb)
             
-            nce_logits, nce_labels = contrastive_loss(fair_filter, score_function, args, device)
-            nce_loss = criterion(nce_logits, nce_labels)
+            # nce_logits, nce_labels = contrastive_loss(fair_filter, score_function, args, device)
+            # nce_loss = criterion(nce_logits, nce_labels)
+            features = fair_filter.reshape(-1,2,768).permute(1,0,2)
+            nce_loss = -info_nce(features[0], features[1])
 
-            club_loss = club()
+            # sens_batch = []
+            b_size = input_ids.shape[0]
+            sens_batch = torch.zeros(size=(b_size//2, 768)).cuda()
+            j=0
+            for idx in unique_ids.numpy():
+                if idx % 2 == 0:
+                    # print(tokenizer.convert_ids_to_tokens(input_ids[j].cpu().detach().numpy()))
+                    sens_string = unique_id_to_feature[idx].sens_word
+                    # print(j, idx, sens_string)
+                    sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
+                    # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
+                    sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
+                    
+                    sens_emb = ori_emb[j//2][sens_index]
+                    # print('sensitive word index and embedding:', sens_index, sens_emb)
+
+                    sens_batch[j//2][sens_index] = sens_emb
+                j+=1
+
+            club_loss = club(sens_batch, features[0])
 
             loss = nce_loss + club_loss
 
@@ -293,9 +330,12 @@ def fairfil_trainer(input_file, args):
             loss.backward()
             optimizer.step()
 
+            # if n_iter % args.log_step ==0:
+            #     top1, top5 = accuracy(nce_logits, nce_labels, topk=(1,5))
+            #     print(f"Iter: {n_iter}\tLoss: {loss}\tTop1 accuracy: {top1[0]}\tTop5 accuracy: {top5[0]}")
+
             if n_iter % args.log_step ==0:
-                top1, top5 = accuracy(nce_logits, nce_labels, topk=(1,5))
-                print(f"Iter: {n_iter}\tLoss: {loss}\tTop1 accuracy: {top1[0]}\tTop5 accuracy: {top5[0]}")
+                print(f"Iter: {n_iter}\tLoss: {loss}")
 
             n_iter+=1
 
