@@ -294,7 +294,7 @@ def fairfil_trainer(input_file, args):
             all_encoder_layers, _ = model(input_ids, token_type_ids=None, attention_mask=input_mask)
             # all_encoder_layers = all_encoder_layers
             sent_emb = all_encoder_layers[-1].permute(1,0,2)[0] #shape: (batch size, 768)
-            ori_emb = sent_emb.reshape(-1,2,768).permute(1,0,2)[0]
+            ori_emb = all_encoder_layers[-1].permute(1,0,2)#shape: (128, batch size, 768)
             
             fair_filter = filter(sent_emb)
             
@@ -315,17 +315,17 @@ def fairfil_trainer(input_file, args):
                     sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
                     # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
                     sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
-                    
-                    sens_emb = ori_emb[j//2][sens_index]
+                    sens_emb = ori_emb[sens_index[0]]
                     # print('sensitive word index and embedding:', sens_index, sens_emb)
 
-                    sens_batch[j//2][sens_index] = sens_emb
+                    sens_batch[j//2] = sens_emb[j]
                 j+=1
 
             club_loss = club(sens_batch, features[0])
 
-            loss = nce_loss + club_loss
+            loss = nce_loss + 0.05 * club_loss
 
+            #pretrain graph 아직 안끊음
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
