@@ -257,8 +257,8 @@ def fairfil_trainer(input_file, args):
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
                                                           output_device=args.local_rank)
-    elif n_gpu > 1:
-        model = torch.nn.DataParallel(model)
+    # elif n_gpu > 1:
+    #     model = torch.nn.DataParallel(model)
     
     for param in model.parameters():
         param.requires_grad = False
@@ -282,8 +282,10 @@ def fairfil_trainer(input_file, args):
     # params = list(filter.parameters())+list(score_function.parameters())
     info_nce = mi_estimators.InfoNCE(x_dim=768, y_dim=768, hidden_size=500)
     club = mi_estimators.CLUBSample(x_dim=768, y_dim=768, hidden_size=500)
-    optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.001)
-
+    if args.dr:
+        optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.001)
+    else:
+        optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters()), lr=0.001)
 
     n_iter = 0
     for epoch in tqdm(range(args.epochs)):
@@ -303,27 +305,30 @@ def fairfil_trainer(input_file, args):
             features = fair_filter.reshape(-1,2,768).permute(1,0,2)
             nce_loss = -info_nce(features[0], features[1])
 
+            if args.dr :
             # sens_batch = []
-            b_size = input_ids.shape[0]
-            sens_batch = torch.zeros(size=(b_size//2, 768)).cuda()
-            j=0
-            for idx in unique_ids.numpy():
-                if idx % 2 == 0:
-                    # print(tokenizer.convert_ids_to_tokens(input_ids[j].cpu().detach().numpy()))
-                    sens_string = unique_id_to_feature[idx].sens_word
-                    # print(j, idx, sens_string)
-                    sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
-                    # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
-                    sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
-                    sens_emb = ori_emb[sens_index[0]]
-                    # print('sensitive word index and embedding:', sens_index, sens_emb)
+                b_size = input_ids.shape[0]
+                sens_batch = torch.zeros(size=(b_size//2, 768)).cuda()
+                j=0
+                for idx in unique_ids.numpy():
+                    if idx % 2 == 0:
+                        # print(tokenizer.convert_ids_to_tokens(input_ids[j].cpu().detach().numpy()))
+                        sens_string = unique_id_to_feature[idx].sens_word
+                        # print(j, idx, sens_string)
+                        sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
+                        # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
+                        sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
+                        sens_emb = ori_emb[sens_index[0]]
+                        # print('sensitive word index and embedding:', sens_index, sens_emb)
 
-                    sens_batch[j//2] = sens_emb[j]
-                j+=1
+                        sens_batch[j//2] = sens_emb[j]
+                    j+=1
 
-            club_loss = club(sens_batch, features[0])
-
-            loss = nce_loss + 0.05 * club_loss
+                club_loss = club(sens_batch, features[0])
+                
+                loss = nce_loss + 0.05 * club_loss
+            else:
+                loss = nce_loss
 
             #pretrain graph 아직 안끊음
             optimizer.zero_grad()
@@ -342,8 +347,11 @@ def fairfil_trainer(input_file, args):
     print("Fairfil training has finished")
     
     filter_ckpt_name = f'filter_ckpt_{args.epochs}.pth'
-    score_ckpt_name = f'score_ckpt_{args.epochs}.pth'
-    save_checkpoint({'state_dict':filter.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,filter_ckpt_name))
-    save_checkpoint({'state_dict':score_function.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,score_ckpt_name))
+    nce_ckpt_name = f'InfoNce_ckpt_{args.epochs}.pth'
+    club_ckpt_name = f'CLUB_ckpt_{args.epochs}.pth'
 
+    save_checkpoint({'state_dict':filter.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,filter_ckpt_name))
+    save_checkpoint({'state_dict':info_nce.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,nce_ckpt_name))
+    if args.dr:
+        save_checkpoint({'state_dict':club.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,club_ckpt_name))
     print("Checkpoint has been saved")
