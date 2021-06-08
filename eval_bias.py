@@ -464,9 +464,17 @@ class BertEncoder(object):
 
 
 class MLP(nn.Module):
-    def __init__(self, D_in, D_out):
+    def __init__(self, D_in, D_out, n_layer=1):
         super().__init__()
-        self.linear = nn.Linear(D_in, D_out)
+        if n_layer == 1:
+            self.linear = nn.Linear(D_in, D_out)
+        elif n_layer == 2:
+            self.linear = nn.Sequential(
+                nn.Linear(D_in, D_out),
+                nn.ReLU(),
+                nn.Linear(D_out, D_out)
+            )
+        
     def forward(self,x):
         x = self.linear(x)
         x = F.relu(x)
@@ -726,7 +734,8 @@ def eval_seat(args):
     gender_subspace = None
 
     if args.debias:
-        fairfil = MLP(768, 768).cuda()
+
+        fairfil = MLP(768, 768, args.filter_nlayer).cuda()
         fairfil.load_state_dict(torch.load(args.filter_ckpt))
     # 	gender_subspace = compute_gender_dir(DEVICE, tokenizer, bert_encoder, def_pairs, 
     # 		args.max_seq_length, k=args.num_dimension, load=True, task=args.model, word_level=word_level, keepdims=True)
@@ -780,8 +789,9 @@ def eval_seat(args):
     if (args.encode_only): return
 
     # print and save results
-    for result in results: logger.info(result)
-    save_dict_to_json(all_tests_dict, results_path)
+    if not args.quiet:
+        for result in results: logger.info(result)
+        save_dict_to_json(all_tests_dict, results_path)
 
     return
 
@@ -796,6 +806,8 @@ if __name__ == '__main__':
                         help="Path of the model to be evaluated")
     parser.add_argument("--filter_ckpt",
                         default='./log/filter_ckpt_10.pth')
+    parser.add_argument("--filter_nlayer",
+                        default=1)
     parser.add_argument("--debias",
                         action='store_true',
                         help="Whether to debias.")
@@ -810,6 +822,8 @@ if __name__ == '__main__':
     parser.add_argument("--results_dir", default="./results/", type=str,
                         help="directory for storing results")
     parser.add_argument("--encode_only", action='store_true')
+    parser.add_argument("--quiet", action='store_true')
+
     parser.add_argument("--num_dimension", "-k", type=int, default=1,
                         help="dimensionality of bias subspace")
     args = parser.parse_args()
