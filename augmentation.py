@@ -13,6 +13,11 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 np.random.seed(42)
 
 words2 = [["woman", "man"], ["girl", "boy"], ["she", "he"], ["mother", "father"], ["daughter", "son"], ["gal", "guy"], ["female", "male"], ["her", "his"], ["herself", "himself"], ["Mary", "John"]]
+words_more = [["actress", "actor"], ["girlfriend", "boyfriend"], ["lady", "gentleman"], ["ladies", "gentlemen"], ["heroin", "hero"], 
+        ["queen", "king"], ["princess", "prince"], ["female", "male"], ["woman", "man"], ["women", "men"], ["aunt", "uncle"], ["granddauter", "grandson"], 
+        ["stepmother", "stepfather"], ["husband", "wife"], ["Mrs.", "Mr."], ["spokeswoman", "spokesman"], ["sister", "brother"]]
+
+words2 =  words2 + words_more 
 
 DIRECTORY = '.'
 
