@@ -19,7 +19,8 @@ from gensim.utils import tokenize
 # from eval_utils import isInSet
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 							  TensorDataset)
-
+import torch.nn as nn
+import torch.nn.functional as F
 
 # first party
 import weat
@@ -462,6 +463,15 @@ class BertEncoder(object):
 		return embeddings
 
 
+class MLP(nn.Module):
+    def __init__(self, D_in, D_out):
+        super().__init__()
+        self.linear = nn.Linear(D_in, D_out)
+    def forward(self,x):
+        x = self.linear(x)
+        x = F.relu(x)
+        return x
+
 def get_tokenizer_encoder(args, device=None):
     '''Return BERT tokenizer and encoder based on args. Used in eval_bias.py.'''
     print("get tokenizer from {}".format(args.model_path))
@@ -634,6 +644,69 @@ def get_encodings(args, encs, tokenizer, bert_encoder, gender_space, device,
         encs[key]['encs'] = emb_dict
     return encs
 
+def debias_encodings(encs, filter):
+    targ1 = list(encs['targ1']['encs'].values()) #(1024, 768,)
+    targ2 = list(encs['targ2']['encs'].values()) #(1024, 768,)
+    attr1 = list(encs['attr1']['encs'].values()) # (1664, 768,)
+    attr2 = list(encs['attr2']['encs'].values()) # (1792, 768,)
+
+    targ1 = torch.tensor(targ1, dtype=torch.float32)
+    targ2 = torch.tensor(targ2, dtype=torch.float32)
+    attr1 = torch.tensor(attr1, dtype=torch.float32)
+    attr2 = torch.tensor(attr2, dtype=torch.float32)
+    targ1 = filter(targ1.cuda()).cpu().detach().numpy()
+    targ2 = filter(targ2.cuda()).cpu().detach().numpy()
+    attr1 = filter(attr1.cuda()).cpu().detach().numpy()
+    attr2 = filter(attr2.cuda()).cpu().detach().numpy()
+
+    emb_dict = {}
+    for index, emb in enumerate(targ1):
+        emb_dict[index] = emb
+    encs['targ1']['encs'] = emb_dict
+
+    emb_dict = {}
+    for index, emb in enumerate(targ2):
+        emb_dict[index] = emb
+    encs['targ2']['encs'] = emb_dict
+
+    emb_dict = {}
+    for index, emb in enumerate(attr1):
+        emb_dict[index] = emb
+    encs['attr1']['encs'] = emb_dict
+
+    emb_dict = {}
+    for index, emb in enumerate(attr2):
+        emb_dict[index] = emb
+    encs['attr2']['encs'] = emb_dict
+
+
+        # texts = encs[key]['examples']
+        # category = encs[key]['category'].lower()
+        # examples = []
+        # encs[key]['text_ids'] = dict()
+        # for i, text in enumerate(texts):
+        #     examples.append(InputExample(guid='{}'.format(i), text_a=text, text_b=None, label=None))
+        #     encs[key]['text_ids'][i] = text
+        # examples_dict[key] = examples
+        # all_embeddings = extract_embeddings(bert_encoder, tokenizer, examples, args.max_seq_length, device, 
+        #             label_list=None, output_mode=None, norm=False, word_level=False)
+        # # logger.info("Debias category {}".format(category))
+
+        # emb_dict = {}
+        # for index, emb in enumerate(all_embeddings):
+        #     emb /= np.linalg.norm(emb)
+        #     # if (args.debias and not category in {'male','female'}): # don't debias gender definitional sentences
+        #     # 	emb = my_we.dropspace(emb, gender_space)
+        #     emb /= np.linalg.norm(emb) # Normalization actually doesn't affect e_size
+        #     emb_dict[index] = emb
+
+        # encs[key]['encs'] = emb_dict
+    return encs
+
+
+
+
+
 def eval_seat(args):
     '''Evaluate bias level with given definitional sentence pairs.'''
     results_path = os.path.join(args.results_dir, args.output_name)
@@ -648,10 +721,13 @@ def eval_seat(args):
     all_tests_dict = dict()
 
     tokenizer, bert_encoder = get_tokenizer_encoder(args, DEVICE)
+
     print("tokenizer: {}".format(tokenizer==None))
     gender_subspace = None
 
-    # if (args.debias):
+    if args.debias:
+        fairfil = MLP(768, 768).cuda()
+        fairfil.load_state_dict(torch.load(args.filter_ckpt))
     # 	gender_subspace = compute_gender_dir(DEVICE, tokenizer, bert_encoder, def_pairs, 
     # 		args.max_seq_length, k=args.num_dimension, load=True, task=args.model, word_level=word_level, keepdims=True)
     # 	logger.info("Computed (gender) bias direction")
@@ -667,6 +743,10 @@ def eval_seat(args):
 
         encs = get_encodings(args, data, tokenizer, bert_encoder, gender_subspace, 
             DEVICE)
+        
+        if args.debias:
+            encs = debias_encodings(encs, fairfil)
+
         if (args.encode_only):
             if (args.debias):
                 outfile_name = 'debiased_encs{}.pkl'.format(test_id)
@@ -714,9 +794,12 @@ if __name__ == '__main__':
                         type=str,
                         default="bert-base-uncased",
                         help="Path of the model to be evaluated")
+    parser.add_argument("--filter_ckpt",
+                        default='./log/filter_ckpt_10.pth')
     parser.add_argument("--debias",
                         action='store_true',
                         help="Whether to debias.")
+    parser.add_argument("--dr", action='store_true')
     parser.add_argument("--equalize",
                         action='store_true',
                         help="Whether to equalize.")
@@ -732,6 +815,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if (args.output_name == None):
         args.output_name = args.def_pairs_name if args.debias else "biased"
+    if args.debias:
+        args.output_name = 'seat_debiased.txt'
+    if args.dr:
+        args.debias = True
+        args.output_name = 'seat_debiased_dr.txt'
+        args.filter_ckpt = './log/filter_with_dr_ckpt_10.pth'
     print("outputname: {}".format(args.output_name))
     if (args.results_dir == None):
         args.results_dir = os.path.join("results", args.model)
