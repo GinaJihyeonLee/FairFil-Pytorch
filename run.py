@@ -22,6 +22,7 @@ def main():
 
     ## Other parameters
     parser.add_argument("--layers", default="-1,-2,-3,-4", type=str)
+    parser.add_argument("--filter_nlayer", default=1, type=int)
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. Sequences longer "
                             "than this will be truncated, and sequences shorter than this will be padded.")
