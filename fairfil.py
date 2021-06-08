@@ -50,9 +50,17 @@ class InputFeatures(object):
 
 
 class MLP(nn.Module):
-    def __init__(self, D_in, D_out):
+    def __init__(self, D_in, D_out, n_layer=1):
         super().__init__()
-        self.linear = nn.Linear(D_in, D_out)
+        if n_layer == 1:
+            self.linear = nn.Linear(D_in, D_out)
+        elif n_layer == 2:
+            self.linear = nn.Sequential(
+                nn.Linear(D_in, D_out),
+                nn.ReLU(),
+                nn.Linear(D_out, D_out)
+            )
+        
     def forward(self,x):
         x = self.linear(x)
         x = F.relu(x)
@@ -237,7 +245,7 @@ def fairfil_trainer(input_file, args):
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
 
     #구체적인 값 명시 안되어서 적당히 설정
-    filter = MLP(768,768).to(device) 
+    filter = (768,768, args.filter_nlayer).to(device) 
     # score_function = SCORE(768*2,100,1).to(device)
     # criterion = nn.CrossEntropyLoss().to(device)
     # params = list(filter.parameters())+list(score_function.parameters())
