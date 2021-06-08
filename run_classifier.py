@@ -45,8 +45,12 @@ from pytorch_pretrained_bert.modeling import BertForSequenceClassification, Bert
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 from def_sent_utils import get_def_pairs
-from eval_utils import isInSet
-from my_debiaswe import my_we
+# from eval_utils import isInSet
+# from my_debiaswe import my_we
+
+from datasets import load_dataset
+from mutual_information import mi_estimators
+from fairfil import MLP
 
 logger = logging.getLogger(__name__)
 
@@ -122,97 +126,67 @@ class DataProcessor(object):
 			return lines
 
 
-class ColaProcessor(DataProcessor):
-	"""Processor for the CoLA data set (GLUE version)."""
-
-	def get_train_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
-
-	def get_dev_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
-
-	def get_labels(self):
-		"""See base class."""
-		return ["0", "1"]
-
-	def _create_examples(self, lines, set_type):
-		"""Creates examples for the training and dev sets."""
-		examples = []
-		for (i, line) in enumerate(lines):
-			guid = "%s-%s" % (set_type, i)
-			text_a = line[3]
-			label = line[1]
-			examples.append(
-				InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
-		return examples
-
-
 class Sst2Processor(DataProcessor):
-	"""Processor for the SST-2 data set (GLUE version)."""
+    """Processor for the SST-2 data set (GLUE version)."""
 
-	def get_train_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        # import pdb
+        # pdb.set_trace()
+        sst = load_dataset("sst","default")
+        sentence = sst['train']['sentence']
+        lbl = sst['train']['label']
+        examples = []
+        set_type="train"
+        for (i, line) in enumerate(sentence):
+            line = line.lower().strip()
+            guid = "%s-%s" % (set_type, i)
+            text_a = line
+            label = lbl[i]
+            if label>0.5: label="1"
+            else: label="0"
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+        return examples
+		# return self._create_examples(
+		# 	self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
 
-	def get_dev_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        sst = load_dataset("sst","default")
+        sentence = sst['test']['sentence']
+        lbl = sst['test']['label']
+        examples = []
+        set_type="dev"
+        for (i, line) in enumerate(sentence):
+            line = line.lower().strip()
+            guid = "%s-%s" % (set_type, i)
+            text_a = line
+            label = lbl[i]
+            if label>0.5: label="1"
+            else: label="0"
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+        return examples
+        # return self._create_examples(
+        #     self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
 
-	def get_labels(self):
-		"""See base class."""
-		return ["0", "1"]
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
 
-	def _create_examples(self, lines, set_type):
-		"""Creates examples for the training and dev sets."""
-		examples = []
-		for (i, line) in enumerate(lines):
-			if i == 0:
-				continue
-			guid = "%s-%s" % (set_type, i)
-			text_a = line[0]
-			label = line[1]
-			examples.append(
-				InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
-		return examples
-
-
-class QnliProcessor(DataProcessor):
-	"""Processor for the STS-B data set (GLUE version)."""
-
-	def get_train_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
-
-	def get_dev_examples(self, data_dir):
-		"""See base class."""
-		return self._create_examples(
-			self._read_tsv(os.path.join(data_dir, "dev.tsv")), 
-			"dev_matched")
-
-	def get_labels(self):
-		"""See base class."""
-		return ["entailment", "not_entailment"]
-
-	def _create_examples(self, lines, set_type):
-		"""Creates examples for the training and dev sets."""
-		examples = []
-		for (i, line) in enumerate(lines):
-			if i == 0:
-				continue
-			guid = "%s-%s" % (set_type, line[0])
-			text_a = line[1]
-			text_b = line[2]
-			label = line[-1]
-			examples.append(
-				InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
-		return examples
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, i)
+            text_a = line[0]
+            label = line[1]
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+        return examples
 
 
 class BertEncoder(object):
@@ -517,16 +491,6 @@ def simple_accuracy(preds, labels):
 	return (preds == labels).mean()
 
 
-def pearson_and_spearman(preds, labels):
-	pearson_corr = pearsonr(preds, labels)[0]
-	spearman_corr = spearmanr(preds, labels)[0]
-	return {
-		"pearson": pearson_corr,
-		"spearmanr": spearman_corr,
-		"corr": (pearson_corr + spearman_corr) / 2,
-	}
-
-
 def compute_metrics(task_name, preds, labels):
 	assert len(preds) == len(labels)
 	if task_name == "cola":
@@ -545,9 +509,8 @@ def parse_args():
 
 	## Required parameters
 	parser.add_argument("--data_dir",
-						default=None,
+						default="./",
 						type=str,
-						required=True,
 						help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
 	parser.add_argument("--bert_model", default="bert-base-uncased", type=str, 
 						choices = ["bert-base-uncased", "bert-large-uncased", "bert-base-cased",
@@ -557,12 +520,11 @@ def parse_args():
 						"bert-large-uncased, bert-base-cased, bert-large-cased, bert-base-multilingual-uncased, "
 						"bert-base-multilingual-cased, bert-base-chinese.")
 	parser.add_argument("--task_name",
-						default=None,
+						default="sst-2",
 						type=str,
-						required=True,
 						help="The name of the task to train.")
 	parser.add_argument("--output_dir",
-						default=None,
+						default="./results/",
 						type=str,
 						help="The output directory where the model predictions and checkpoints will be written.")
 
@@ -587,8 +549,11 @@ def parse_args():
 	parser.add_argument("--do_eval",
 						action='store_true',
 						help="Whether to run eval on the dev set.")
-	parser.add_argument("--do_lower_case",
+	parser.add_argument("--do_fairfil",
 						action='store_true',
+						help="Add fairfil filter")
+	parser.add_argument("--do_lower_case",
+						default=True,
 						help="Set this flag if you are using an uncased model.")
 	parser.add_argument("--normalize",
 						action='store_true',
@@ -599,11 +564,14 @@ def parse_args():
 	parser.add_argument("--debias",
 						action='store_true',
 						help="Set this flag if you want embeddings debiased.")
+	parser.add_argument("--dr",
+						action='store_true',
+						help="regularization club")
 	parser.add_argument("--no_save",
 						action='store_true',
 						help="Set this flag if you don't want to save any results.")
 	parser.add_argument("--train_batch_size",
-						default=32,
+						default=8,
 						type=int,
 						help="Total batch size for training.")
 	parser.add_argument("--eval_batch_size",
@@ -611,11 +579,11 @@ def parse_args():
 						type=int,
 						help="Total batch size for eval.")
 	parser.add_argument("--learning_rate",
-						default=2e-5,
+						default=0.001,
 						type=float,
 						help="The initial learning rate for Adam.")
 	parser.add_argument("--num_train_epochs",
-						default=3.0,
+						default=20.0,
 						type=float,
 						help="Total number of training epochs to perform.")
 	parser.add_argument("--warmup_proportion",
@@ -669,118 +637,51 @@ def parse_args():
 	return args
 
 
-def get_tokenizer_encoder(args, device=None):
-	'''Return BERT tokenizer and encoder based on args. Used in eval_bias.py.'''
-	print("get tokenizer from {}".format(args.model_path))
-	tokenizer = BertTokenizer.from_pretrained(args.model_path, do_lower_case=args.do_lower_case)
-	cache_dir = args.cache_dir if args.cache_dir else os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank))
-	model_weights_path = args.model_path
-
-	model = BertForSequenceClassification.from_pretrained(model_weights_path,
-			  cache_dir=cache_dir,
-			  num_labels=2,
-			  normalize=args.normalize,
-			  tune_bert=args.tune_bert)
-	if (device != None): model.to(device)
-	bert_encoder = BertEncoder(model, device)
-
-	return tokenizer, bert_encoder
-
-
-def get_encodings(args, encs, tokenizer, bert_encoder, gender_space, device, 
-		word_level=False, specific_set=None):
-	'''Extract BERT embeddings from encodings dictionary.
-	   Perform the debiasing step if debias is specified in args.
-	'''
-	if (word_level): assert(specific_set != None)
-
-	logger.info("Get encodings")
-	logger.info("Debias={}".format(args.debias))
-
-	examples_dict = dict()
-	for key in ['targ1', 'targ2', 'attr1', 'attr2']:
-		texts = encs[key]['examples']
-		category = encs[key]['category'].lower()
-		examples = []
-		encs[key]['text_ids'] = dict()
-		for i, text in enumerate(texts):
-			examples.append(InputExample(guid='{}'.format(i), text_a=text, text_b=None, label=None))
-			encs[key]['text_ids'][i] = text
-		examples_dict[key] = examples
-		all_embeddings = extract_embeddings(bert_encoder, tokenizer, examples, args.max_seq_length, device, 
-					label_list=None, output_mode=None, norm=False, word_level=word_level)
-
-		logger.info("Debias category {}".format(category))
-
-		emb_dict = {}
-		for index, emb in enumerate(all_embeddings):
-			emb /= np.linalg.norm(emb)
-			if (args.debias and not category in {'male','female'}): # don't debias gender definitional sentences
-				emb = my_we.dropspace(emb, gender_space)
-			emb /= np.linalg.norm(emb) # Normalization actually doesn't affect e_size
-			emb_dict[index] = emb
-
-		encs[key]['encs'] = emb_dict
-	return encs
-
-
 def prepare_model_and_bias(args, device, num_labels, cache_dir):
-	'''Return model and gender direction (computed by resume_model_path)'''
-	tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
-	# a. load pretrained model and compute gender direction
-	model_weights_path = args.bert_model if (args.resume_model_path == "") else args.resume_model_path
-	logger.info("Initialize model with {}".format(model_weights_path))
-	model = BertForSequenceClassification.from_pretrained(model_weights_path,
-			  cache_dir=cache_dir,
-			  num_labels=num_labels,
-			  normalize=args.normalize,
-			  tune_bert=args.tune_bert).to(device)
-	gender_dir = None
-	if (args.debias):
-		bert_encoder = BertEncoder(model, device)
-		def_pairs = get_def_pairs(args.def_pairs_name)
-		gender_dir = compute_gender_dir(device, tokenizer, bert_encoder, 
-			def_pairs, args.max_seq_length, k=args.num_dimension, load=True, task='pretrained')
-		gender_dir = torch.tensor(gender_dir, dtype=torch.float, device=device)
+    '''Return model and gender direction (computed by resume_model_path)'''
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
+    # a. load pretrained model and compute gender direction
+    model_weights_path = args.bert_model if (args.resume_model_path == "") else args.resume_model_path
+    logger.info("Initialize model with {}".format(model_weights_path))
+    if args.do_fairfil:
+        filter = MLP(768,768).to(device)
+        if args.dr:
+            filter.load_state_dict(torch.load('./log/filter_with_dr_ckpt_10.pth'))
+        else:
+            filter.load_state_dict(torch.load('./log/filter_ckpt_10.pth'))
+        for param in filter.parameters():
+            param.requires_grad = False
+        # info_nce = mi_estimators.InfoNCE(x_dim=768, y_dim=768, hidden_size=500)
+        # info_nce.load_state_dict(torch.load('./log/InfoNce_ckpt_10.pth'))
+        # club = None
+        # if args.dr:
+        #     club = mi_estimators.CLUB(x_dim=768, y_dim=768, hidden_size=500)
+        #     club.load_state_dict(torch.load('./log/CLUB_ckpt_10.pth'))
+        model = BertForSequenceClassification.from_pretrained(model_weights_path,
+                cache_dir=cache_dir,
+                num_labels=num_labels,
+                normalize=args.normalize,
+                tune_bert=args.tune_bert,
+                fairfil=True,
+                filter=filter
+                ).to(device)
+    else:
+        model = BertForSequenceClassification.from_pretrained(model_weights_path,
+                cache_dir=cache_dir,
+                num_labels=num_labels,
+                normalize=args.normalize,
+                tune_bert=args.tune_bert,
+                fairfil=False
+                ).to(device)
+    gender_dir = None
+    if (args.debias):
+        bert_encoder = BertEncoder(model, device)
+        def_pairs = get_def_pairs(args.def_pairs_name)
+        gender_dir = compute_gender_dir(device, tokenizer, bert_encoder, 
+            def_pairs, args.max_seq_length, k=args.num_dimension, load=True, task='pretrained')
+        gender_dir = torch.tensor(gender_dir, dtype=torch.float, device=device)
 
-	return model, tokenizer, gender_dir
-
-
-def prepare_model_and_pretrained_bias(args, device, num_labels, cache_dir):
-	'''Return model and gender direction (computed by pretrained bert)'''
-	tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
-	# a. load pretrained model and compute gender direction
-	model_pretrained = BertForSequenceClassification.from_pretrained(args.bert_model,
-			  cache_dir=cache_dir,
-			  num_labels=num_labels,
-			  normalize=args.normalize,
-			  tune_bert=args.tune_bert).to(device)
-	gender_dir_pretrained = None
-	if (args.debias):
-		bert_encoder_pretrained = BertEncoder(model_pretrained, device)
-		def_pairs = get_def_pairs(args.def_pairs_name)
-		gender_dir_pretrained = compute_gender_dir(device, tokenizer, bert_encoder_pretrained, 
-			def_pairs, args.max_seq_length, k=args.num_dimension, load=True, task='pretrained')
-		gender_dir_pretrained = torch.tensor(gender_dir_pretrained, dtype=torch.float, device=device)
-
-	if (args.resume_model_path == ""):
-		model_weights_path = args.bert_model
-	else:
-		model_weights_path = args.resume_model_path
-		logger.info("Resume training from {}".format(model_weights_path))
-	
-	# b. Load model for training
-	if (args.do_train and args.resume_model_path != ""):
-		del model_pretrained
-		model = BertForSequenceClassification.from_pretrained(args.resume_model_path,
-				  cache_dir=cache_dir,
-				  num_labels=num_labels,
-				  normalize=args.normalize,
-				  tune_bert=args.tune_bert).to(device)
-	else:
-		model = model_pretrained
-
-	return model, tokenizer, gender_dir_pretrained
+    return model, tokenizer, gender_dir
 
 
 def prepare_optimizer(args, model, num_train_optimization_steps):
@@ -805,258 +706,261 @@ def prepare_optimizer(args, model, num_train_optimization_steps):
 
 
 def main():
-	'''Fine-tune BERT on the specified task and evaluate on dev set.'''
-	args = parse_args()
+    '''Fine-tune BERT on the specified task and evaluate on dev set.'''
+    args = parse_args()
 
-	# if args.server_ip and args.server_port:
-	# 	# Distant debugging - see https://code.visualstudio.com/docs/python/debugging#_attach-to-a-local-script
-	# 	import ptvsd
-	# 	print("Waiting for debugger attach")
-	# 	ptvsd.enable_attach(address=(args.server_ip, args.server_port), redirect_output=True)
-	# 	ptvsd.wait_for_attach()
+    processors = {
+        # "cola": ColaProcessor,
+        "sst-2": Sst2Processor,
+        # "qnli": QnliProcessor
+    }
 
-	processors = {
-		# "cola": ColaProcessor,
-		"sst-2": Sst2Processor,
-		# "qnli": QnliProcessor
-	}
+    output_modes = {
+        # "cola": "classification",
+        "sst-2": "classification",
+        # "qnli": "classification"
+    }
 
-	output_modes = {
-		# "cola": "classification",
-		"sst-2": "classification",
-		# "qnli": "classification"
-	}
+    if args.local_rank == -1 or args.no_cuda:
+        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        n_gpu = torch.cuda.device_count()
+    else:
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        n_gpu = 1
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.distributed.init_process_group(backend='nccl')
 
-	if args.local_rank == -1 or args.no_cuda:
-		device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-		n_gpu = torch.cuda.device_count()
-	else:
-		torch.cuda.set_device(args.local_rank)
-		device = torch.device("cuda", args.local_rank)
-		n_gpu = 1
-		# Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-		torch.distributed.init_process_group(backend='nccl')
+    logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+                        datefmt = '%m/%d/%Y %H:%M:%S',
+                        level = logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
 
-	logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-						datefmt = '%m/%d/%Y %H:%M:%S',
-						level = logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+    logger.info("device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
+        device, n_gpu, bool(args.local_rank != -1), args.fp16))
 
-	logger.info("device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
-		device, n_gpu, bool(args.local_rank != -1), args.fp16))
+    if args.gradient_accumulation_steps < 1:
+        raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
+                            args.gradient_accumulation_steps))
 
-	if args.gradient_accumulation_steps < 1:
-		raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
-							args.gradient_accumulation_steps))
+    args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
 
-	args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if n_gpu > 0:
+        torch.cuda.manual_seed_all(args.seed)
 
-	random.seed(args.seed)
-	np.random.seed(args.seed)
-	torch.manual_seed(args.seed)
-	if n_gpu > 0:
-		torch.cuda.manual_seed_all(args.seed)
+    if not args.do_train and not args.do_eval:
+        raise ValueError("At least one of `do_train` or `do_eval` must be True.")
 
-	if not args.do_train and not args.do_eval:
-		raise ValueError("At least one of `do_train` or `do_eval` must be True.")
+    if (not args.no_save):
+        if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
+            print("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
 
-	if (not args.no_save):
-		if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
-			raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-		if not os.path.exists(args.output_dir):
-			os.makedirs(args.output_dir)
+    task_name = args.task_name.lower()
+    if task_name not in processors:
+        raise ValueError("Task not found: %s" % (task_name))
 
-	task_name = args.task_name.lower()
-	if task_name not in processors:
-		raise ValueError("Task not found: %s" % (task_name))
+    processor = processors[task_name]()
+    output_mode = output_modes[task_name]
 
-	processor = processors[task_name]()
-	output_mode = output_modes[task_name]
+    label_list = processor.get_labels()
+    num_labels = len(label_list)
 
-	label_list = processor.get_labels()
-	num_labels = len(label_list)
+    train_examples = None
+    num_train_optimization_steps = None
 
-	train_examples = None
-	num_train_optimization_steps = None
+    cache_dir = args.cache_dir if args.cache_dir else os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank))
 
-	cache_dir = args.cache_dir if args.cache_dir else os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank))
+    if (args.do_train): 
 
-	if (args.do_train): 
-		# Prepare training examples, model, tokenizer, optimizer, and bias direction.
-		train_examples = processor.get_train_examples(args.data_dir)
-		num_train_optimization_steps = int(
-			len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
-		if args.local_rank != -1:
-			num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
+        train_examples = processor.get_train_examples(args.data_dir)
+        num_train_optimization_steps = int(
+            len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
+        if args.local_rank != -1:
+            num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
+        model, tokenizer, gender_dir_pretrained = prepare_model_and_bias(args, device, num_labels, cache_dir)	
+        optimizer = prepare_optimizer(args, model, num_train_optimization_steps)
 
-		model, tokenizer, gender_dir_pretrained = prepare_model_and_bias(args, device, num_labels, cache_dir)	
-		optimizer = prepare_optimizer(args, model, num_train_optimization_steps)
+    global_step = 0
+    nb_tr_steps = 0
+    tr_loss = 0
+    if args.do_train:
+        # start training
+        logger.info("Prepare training features")
+        train_features = convert_examples_to_features(
+            train_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+        logger.info("***** Running training *****")
+        logger.info("  Num examples = %d", len(train_examples))
+        logger.info("  Batch size = %d", args.train_batch_size)
+        logger.info("  Num steps = %d", num_train_optimization_steps)
+        all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
 
-	global_step = 0
-	nb_tr_steps = 0
-	tr_loss = 0
-	if args.do_train:
-		# start training
-		logger.info("Prepare training features")
-		train_features = convert_examples_to_features(
-			train_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-		logger.info("***** Running training *****")
-		logger.info("  Num examples = %d", len(train_examples))
-		logger.info("  Batch size = %d", args.train_batch_size)
-		logger.info("  Num steps = %d", num_train_optimization_steps)
-		all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
-		all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
-		all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
+        if output_mode == "classification":
+            all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.long)
+        elif output_mode == "regression":
+            all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.float)
 
-		if output_mode == "classification":
-			all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.long)
-		elif output_mode == "regression":
-			all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.float)
+        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        if args.local_rank == -1:
+            train_sampler = RandomSampler(train_data)
+        else:
+            train_sampler = DistributedSampler(train_data)
+        train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
-		train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-		if args.local_rank == -1:
-			train_sampler = RandomSampler(train_data)
-		else:
-			train_sampler = DistributedSampler(train_data)
-		train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
+        model.classifier.train()
+        for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
+            epoch_loss = 0
+            nb_tr_examples, nb_tr_steps = 0, 0
+            for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+                batch = tuple(t.to(device) for t in batch)
+                input_ids, input_mask, segment_ids, label_ids = batch
 
-		model.classifier.train()
-		for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
-			epoch_loss = 0
-			nb_tr_examples, nb_tr_steps = 0, 0
-			for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
-				batch = tuple(t.to(device) for t in batch)
-				input_ids, input_mask, segment_ids, label_ids = batch
+                # define a new function to compute loss values for both output_modes
+                logits = model(input_ids, segment_ids, input_mask, remove_bias=args.debias, bias_dir=gender_dir_pretrained)
+                # import pdb
+                # pdb.set_trace()
+                if output_mode == "classification":
+                    loss_fct = CrossEntropyLoss()
+                    loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+                elif output_mode == "regression":
+                    loss_fct = MSELoss()
+                    loss = loss_fct(logits.view(-1), label_ids.view(-1))
 
-				# define a new function to compute loss values for both output_modes
-				logits = model(input_ids, segment_ids, input_mask, remove_bias=args.debias, bias_dir=gender_dir_pretrained)
+                if n_gpu > 1:
+                    loss = loss.mean() # mean() to average on multi-gpu.
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
 
-				if output_mode == "classification":
-					loss_fct = CrossEntropyLoss()
-					loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
-				elif output_mode == "regression":
-					loss_fct = MSELoss()
-					loss = loss_fct(logits.view(-1), label_ids.view(-1))
+                loss.backward()
 
-				if n_gpu > 1:
-					loss = loss.mean() # mean() to average on multi-gpu.
-				if args.gradient_accumulation_steps > 1:
-					loss = loss / args.gradient_accumulation_steps
+                tr_loss += loss.item()
+                epoch_loss += loss.item()
+                nb_tr_examples += input_ids.size(0)
+                nb_tr_steps += 1
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    global_step += 1
+            epoch_loss /= len(train_dataloader)
+            print("Epoch {}: loss={}".format(epoch, epoch_loss))
 
-				loss.backward()
+        if not args.no_save:
+            # Save a trained model, configuration and tokenizer
+            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
 
-				tr_loss += loss.item()
-				epoch_loss += loss.item()
-				nb_tr_examples += input_ids.size(0)
-				nb_tr_steps += 1
-				if (step + 1) % args.gradient_accumulation_steps == 0:
-					optimizer.step()
-					optimizer.zero_grad()
-					global_step += 1
-			epoch_loss /= len(train_dataloader)
-			print("Epoch {}: loss={}".format(epoch, epoch_loss))
+            # If we save using the predefined names, we can load using `from_pretrained`
+            output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
+            output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
 
-		if not args.no_save:
-			# Save a trained model, configuration and tokenizer
-			model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+            torch.save(model_to_save.state_dict(), output_model_file)
+            model_to_save.config.to_json_file(output_config_file)
+            tokenizer.save_vocabulary(args.output_dir)
 
-			# If we save using the predefined names, we can load using `from_pretrained`
-			output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
-			output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
 
-			torch.save(model_to_save.state_dict(), output_model_file)
-			model_to_save.config.to_json_file(output_config_file)
-			tokenizer.save_vocabulary(args.output_dir)
+    # if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
+    #     if (not args.do_train):
+    #         # Load a trained model and vocabulary that you have fine-tuned
+    #         import pdb
+    #         pdb.set_trace()
+    #         model = BertForSequenceClassification.from_pretrained(os.path.join(args.output_dir,'pytorch_model.bin'),
+    #                     cache_dir=cache_dir,
+    #                     num_labels=num_labels,
+    #                     normalize=args.normalize,
+    #                     tune_bert=args.tune_bert)
+    #         tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+    #         model.to(device)
+        # Get gender direction
+        gender_dir_tuned = None
+        # if args.debias:
+        #     bert_encoder = BertEncoder(model, device)
+        #     def_pairs = get_def_pairs(args.def_pairs_name)
+        #     gender_dir_tuned = compute_gender_dir(device, tokenizer, bert_encoder, def_pairs, args.max_seq_length, k=args.num_dimension, load=False, task=args.task_name)
+        #     gender_dir_tuned = torch.tensor(gender_dir_tuned, dtype=torch.float, device=device)
 
-	if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-		if (not args.do_train):
-			# Load a trained model and vocabulary that you have fine-tuned
-			model = BertForSequenceClassification.from_pretrained(args.output_dir,
-					  cache_dir=cache_dir,
-					  num_labels=num_labels,
-					  normalize=args.normalize,
-					  tune_bert=args.tune_bert)
-			tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-			model.to(device)
-		# Get gender direction
-		gender_dir_tuned = None
-		if args.debias:
-			bert_encoder = BertEncoder(model, device)
-			def_pairs = get_def_pairs(args.def_pairs_name)
-			gender_dir_tuned = compute_gender_dir(device, tokenizer, bert_encoder, def_pairs, args.max_seq_length, k=args.num_dimension, load=False, task=args.task_name)
-			gender_dir_tuned = torch.tensor(gender_dir_tuned, dtype=torch.float, device=device)
+        eval_examples = processor.get_dev_examples(args.data_dir)
+        eval_features = convert_examples_to_features(
+            eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+        logger.info("***** Running evaluation *****")
+        logger.info("  Num examples = %d", len(eval_examples))
+        logger.info("  Batch size = %d", args.eval_batch_size)
+        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
 
-		eval_examples = processor.get_dev_examples(args.data_dir)
-		eval_features = convert_examples_to_features(
-			eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-		logger.info("***** Running evaluation *****")
-		logger.info("  Num examples = %d", len(eval_examples))
-		logger.info("  Batch size = %d", args.eval_batch_size)
-		all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-		all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-		all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+        if output_mode == "classification":
+            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
+        elif output_mode == "regression":
+            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.float)
 
-		if output_mode == "classification":
-			all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
-		elif output_mode == "regression":
-			all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.float)
+        all_sample_ids = torch.arange(len(eval_features), dtype=torch.long)
 
-		all_sample_ids = torch.arange(len(eval_features), dtype=torch.long)
+        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_sample_ids)
+        # Run prediction for full data
+        eval_dataloader = DataLoader(eval_data, batch_size=args.eval_batch_size, shuffle=False)
 
-		eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_sample_ids)
-		# Run prediction for full data
-		eval_dataloader = DataLoader(eval_data, batch_size=args.eval_batch_size, shuffle=False)
+        model.eval()
+        eval_loss = 0
+        nb_eval_steps = 0
+        preds = []
 
-		model.eval()
-		eval_loss = 0
-		nb_eval_steps = 0
-		preds = []
+        for input_ids, input_mask, segment_ids, label_ids, sample_ids in tqdm(eval_dataloader, desc="Evaluating"):
+            input_ids = input_ids.to(device)
+            input_mask = input_mask.to(device)
+            segment_ids = segment_ids.to(device)
+            label_ids = label_ids.to(device)
 
-		for input_ids, input_mask, segment_ids, label_ids, sample_ids in tqdm(eval_dataloader, desc="Evaluating"):
-			input_ids = input_ids.to(device)
-			input_mask = input_mask.to(device)
-			segment_ids = segment_ids.to(device)
-			label_ids = label_ids.to(device)
+            with torch.no_grad():
+                logits = model(input_ids, segment_ids, input_mask, 
+                    labels=None, remove_bias=args.debias, bias_dir=gender_dir_tuned)
 
-			with torch.no_grad():
-				logits = model(input_ids, segment_ids, input_mask, 
-					labels=None, remove_bias=args.debias, bias_dir=gender_dir_tuned)
+            # create eval loss and other metric required by the task
+            if output_mode == "classification":
+                loss_fct = CrossEntropyLoss()
+                tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+            elif output_mode == "regression":
+                loss_fct = MSELoss()
+                tmp_eval_loss = loss_fct(logits.view(-1), label_ids.view(-1))
+            
+            eval_loss += tmp_eval_loss.mean().item()
+            nb_eval_steps += 1
+            if len(preds) == 0:
+                preds.append(logits.detach().cpu().numpy())
+            else:
+                preds[0] = np.append(
+                    preds[0], logits.detach().cpu().numpy(), axis=0)
 
-			# create eval loss and other metric required by the task
-			if output_mode == "classification":
-				loss_fct = CrossEntropyLoss()
-				tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
-			elif output_mode == "regression":
-				loss_fct = MSELoss()
-				tmp_eval_loss = loss_fct(logits.view(-1), label_ids.view(-1))
-			
-			eval_loss += tmp_eval_loss.mean().item()
-			nb_eval_steps += 1
-			if len(preds) == 0:
-				preds.append(logits.detach().cpu().numpy())
-			else:
-				preds[0] = np.append(
-					preds[0], logits.detach().cpu().numpy(), axis=0)
+        eval_loss = eval_loss / nb_eval_steps
+        preds = preds[0]
+        if output_mode == "classification":
+            preds = np.argmax(preds, axis=1)
+        elif output_mode == "regression":
+            preds = np.squeeze(preds)
+        result = compute_metrics(task_name, preds, all_label_ids.numpy())
+        loss = tr_loss/global_step if (args.do_train and global_step > 0) else None
 
-		eval_loss = eval_loss / nb_eval_steps
-		preds = preds[0]
-		if output_mode == "classification":
-			preds = np.argmax(preds, axis=1)
-		elif output_mode == "regression":
-			preds = np.squeeze(preds)
-		result = compute_metrics(task_name, preds, all_label_ids.numpy())
-		loss = tr_loss/global_step if (args.do_train and global_step > 0) else None
+        result['eval_loss'] = eval_loss
+        result['global_step'] = global_step
+        result['loss'] = loss
 
-		result['eval_loss'] = eval_loss
-		result['global_step'] = global_step
-		result['loss'] = loss
+        if args.debias:
+            if args.dr:
+                output_eval_file = os.path.join(args.output_dir, "eval_results_debias.txt")
+            else:
+                output_eval_file = os.path.join(args.output_dir, "eval_results_debias_reg.txt")
+        else:
+            output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
 
-		output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-		with open(output_eval_file, "w") as writer:
-			logger.info("***** Eval results *****")
-			for key in sorted(result.keys()):
-				logger.info("  %s = %s", key, str(result[key]))
-				if (not args.no_save):
-					writer.write("%s = %s\n" % (key, str(result[key])))
+        with open(output_eval_file, "w") as writer:
+            logger.info("***** Eval results *****")
+            for key in sorted(result.keys()):
+                logger.info("  %s = %s", key, str(result[key]))
+                if (not args.no_save):
+                    writer.write("%s = %s\n" % (key, str(result[key])))
 
 
 if __name__ == "__main__":
