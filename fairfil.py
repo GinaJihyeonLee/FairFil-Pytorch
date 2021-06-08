@@ -21,8 +21,8 @@ from pytorch_pretrained_bert.modeling import BertModel
 from utils import accuracy
 from utils import save_checkpoint
 
-# from mutual_information import info_nce
 from mutual_information import mi_estimators
+
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -57,45 +57,6 @@ class MLP(nn.Module):
         x = self.linear(x)
         x = F.relu(x)
         return x
-
-
-# class SCORE(nn.Module):
-#     def __init__(self, D_in, D_mid, D_out):
-#         super().__init__()
-#         self.linear1 = nn.Linear(D_in, D_mid)
-#         self.linear2 = nn.Linear(D_mid, D_out)
-#     def forward(self,x):
-#         x = self.linear1(x)
-#         x = self.linear2(x)
-#         return x
-
-
-# def contrastive_loss(features, score_function, args, device):
-#     features = features.reshape(-1,2,768).permute(1,0,2) #[32,768]-->[2,16,768]
-#     features = torch.cat((features[0],features[1]),dim=0) 
-#     labels = torch.cat([torch.arange(features.shape[0]//2) for i in range(2)], dim=0)
-#     # labels = torch.arange(features.shape[0]//2).repeat_interleave(2)
-#     labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
-#     labels = labels.to(device)
-
-#     features = F.normalize(features, dim=1)
-#     #score function 기준으로 바꾸기
-#     similarity_matrix = torch.matmul(features, features.T)
-#     # discard the main diagonal from both: labels and similarities matrix
-#     mask = torch.eye(labels.shape[0]).to(device) > 0
-#     labels = labels[~mask].view(labels.shape[0], -1)
-#     similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
-
-    # assert similarity_matrix.shape == labels.shape
-
-    # select and combine multiple positives
-    # positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
-    # # select only the negatives the negatives
-    # negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
-    # logits = torch.cat([positives, negatives], dim=1)
-    # labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
-    # # logits = logits / self.args.temperature
-    # return logits, labels
 
 
 def convert_examples_to_features(examples, seq_length, tokenizer):
@@ -257,8 +218,8 @@ def fairfil_trainer(input_file, args):
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank],
                                                           output_device=args.local_rank)
-    elif n_gpu > 1:
-        model = torch.nn.DataParallel(model)
+    # elif n_gpu > 1:
+    #     model = torch.nn.DataParallel(model)
     
     for param in model.parameters():
         param.requires_grad = False
@@ -281,9 +242,13 @@ def fairfil_trainer(input_file, args):
     # criterion = nn.CrossEntropyLoss().to(device)
     # params = list(filter.parameters())+list(score_function.parameters())
     info_nce = mi_estimators.InfoNCE(x_dim=768, y_dim=768, hidden_size=500)
-    club = mi_estimators.CLUBSample(x_dim=768, y_dim=768, hidden_size=500)
-    optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.001)
-
+    club = mi_estimators.CLUB(x_dim=768, y_dim=768, hidden_size=500)
+    if args.dr:
+        mi_optimizer = torch.optim.Adam(club.parameters(), lr=0.0001)
+        # optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters())+list(club.parameters()), lr=0.00001)
+        optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters()), lr=0.00001)
+    else:
+        optimizer = torch.optim.Adam(list(filter.parameters())+list(info_nce.parameters()), lr=0.00001)
 
     n_iter = 0
     for epoch in tqdm(range(args.epochs)):
@@ -294,38 +259,48 @@ def fairfil_trainer(input_file, args):
             all_encoder_layers, _ = model(input_ids, token_type_ids=None, attention_mask=input_mask)
             # all_encoder_layers = all_encoder_layers
             sent_emb = all_encoder_layers[-1].permute(1,0,2)[0] #shape: (batch size, 768)
-            ori_emb = sent_emb.reshape(-1,2,768).permute(1,0,2)[0]
+            ori_emb = all_encoder_layers[-1].permute(1,0,2)#shape: (128, batch size, 768)
             
-            fair_filter = filter(sent_emb)
+            fair_emb = filter(sent_emb)
             
             # nce_logits, nce_labels = contrastive_loss(fair_filter, score_function, args, device)
             # nce_loss = criterion(nce_logits, nce_labels)
-            features = fair_filter.reshape(-1,2,768).permute(1,0,2)
+            features = fair_emb.reshape(-1,2,768).permute(1,0,2)
             nce_loss = -info_nce(features[0], features[1])
+ 
+            if args.dr :
 
-            # sens_batch = []
-            b_size = input_ids.shape[0]
-            sens_batch = torch.zeros(size=(b_size//2, 768)).cuda()
-            j=0
-            for idx in unique_ids.numpy():
-                if idx % 2 == 0:
-                    # print(tokenizer.convert_ids_to_tokens(input_ids[j].cpu().detach().numpy()))
-                    sens_string = unique_id_to_feature[idx].sens_word
-                    # print(j, idx, sens_string)
-                    sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
-                    # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
-                    sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
-                    
-                    sens_emb = ori_emb[j//2][sens_index]
-                    # print('sensitive word index and embedding:', sens_index, sens_emb)
+                b_size = input_ids.shape[0]
+                sens_batch = torch.zeros(size=features[0].shape).cuda()
+                j=0
+                for idx in unique_ids.numpy():
+                    if idx % 2 == 0:
+                        # print(tokenizer.convert_ids_to_tokens(input_ids[j].cpu().detach().numpy()))
+                        sens_string = unique_id_to_feature[idx].sens_word
+                        # print(j, idx, sens_string)
+                        sens_id = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0]
+                        # print(idx, 'sensitive word and token id:', sens_string, tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sens_string))[0])
+                        sens_index = (input_ids[j]==sens_id).nonzero(as_tuple=True)[0]
+                        sens_emb = ori_emb[sens_index[0]]
+                        # print('sensitive word index and embedding:', sens_index, sens_emb)
 
-                    sens_batch[j//2][sens_index] = sens_emb
-                j+=1
+                        sens_batch[j//2] = sens_emb[j]
+                    j+=1
 
-            club_loss = club(sens_batch, features[0])
+                for i in range(50):
+                    club.train()
+                    mi_loss = club.learning_loss(sens_batch, features[0])
+                    mi_optimizer.zero_grad()
+                    mi_loss.backward(retain_graph=True)
+                    mi_optimizer.step()
 
-            loss = nce_loss + club_loss
+                club_loss = club(sens_batch, features[0])
+                
+                loss = nce_loss + 1 * club_loss
+            else:
+                loss = nce_loss
 
+            #pretrain graph 아직 안끊음
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -341,9 +316,20 @@ def fairfil_trainer(input_file, args):
 
     print("Fairfil training has finished")
     
-    filter_ckpt_name = f'filter_ckpt_{args.epochs}.pth'
-    score_ckpt_name = f'score_ckpt_{args.epochs}.pth'
-    save_checkpoint({'state_dict':filter.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,filter_ckpt_name))
-    save_checkpoint({'state_dict':score_function.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,score_ckpt_name))
+    if args.dr:
+        filter_ckpt_name = f'filter_with_dr_ckpt_{args.epochs}.pth'
+    else:
+        filter_ckpt_name = f'filter_ckpt_{args.epochs}.pth'
+    nce_ckpt_name = f'InfoNce_ckpt_{args.epochs}.pth'
+    club_ckpt_name = f'CLUB_ckpt_{args.epochs}.pth'
 
+    # save_checkpoint({'state_dict':filter.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,filter_ckpt_name))
+    # save_checkpoint({'state_dict':info_nce.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,nce_ckpt_name))
+    torch.save(filter.state_dict(), os.path.join(args.log_dir,filter_ckpt_name))
+    torch.save(info_nce.state_dict(), os.path.join(args.log_dir,nce_ckpt_name))
+    if args.dr:
+        # save_checkpoint({'state_dict':club.state_dict(),'optimizer':optimizer.state_dict()},filename=os.path.join(args.log_dir,club_ckpt_name))
+        torch.save(club.state_dict(), os.path.join(args.log_dir,club_ckpt_name))
     print("Checkpoint has been saved")
+
+ 

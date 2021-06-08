@@ -22,12 +22,12 @@ class CLUB(nn.Module):  # CLUB: Mutual Information Contrastive Learning Upper Bo
         #print("create CLUB with dim {}, {}, hiddensize {}".format(x_dim, y_dim, hidden_size))
         self.p_mu = nn.Sequential(nn.Linear(x_dim, hidden_size//2),
                                        nn.ReLU(),
-                                       nn.Linear(hidden_size//2, y_dim))
+                                       nn.Linear(hidden_size//2, y_dim)).cuda()
         # p_logvar outputs log of variance of q(Y|X)
         self.p_logvar = nn.Sequential(nn.Linear(x_dim, hidden_size//2),
                                        nn.ReLU(),
                                        nn.Linear(hidden_size//2, y_dim),
-                                       nn.Tanh())
+                                       nn.Tanh()).cuda()
 
     def get_mu_logvar(self, x_samples):
         mu = self.p_mu(x_samples)

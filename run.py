@@ -9,6 +9,8 @@ import json
 import re
 from tqdm import tqdm
 
+import os
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -35,12 +37,17 @@ def main():
     parser.add_argument("--no_cuda",
                         action='store_true',
                         help="Whether not to use CUDA when available")
+    parser.add_argument("--dr", action='store_true')
+
 
     args = parser.parse_args()
 
     aug_data = aug.get_data()
     f = open('aug_data.json','w')
     json.dump(aug_data, f)
+
+    if not os.path.exists(args.log_dir):
+        os.makedirs(args.log_dir)
 
     fairfil_trainer(input_file=aug_data, args=args)
     #finetuning
